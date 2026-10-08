@@ -1,1 +1,918 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClassPulse - 互動式即時問答與統計系統</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f5ff',
+                            100: '#e5edff',
+                            500: '#4f46e5',
+                            600: '#4338ca',
+                            700: '#3730a3',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Canvas Confetti CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        body {
+            font-family: 'Plus Jakarta Sans', 'Noto Sans TC', sans-serif;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-full flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
 
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, updateDoc, collection, addDoc, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Configuration & App State
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'class-pulse-default';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+        let db = null;
+        let auth = null;
+        let currentUser = null;
+
+        window.AppState = {
+            role: 'teacher', // 'teacher' | 'student'
+            roomCode: '8888',
+            studentName: '',
+            studentId: '',
+            hasSubmitted: false,
+            selectedOption: null,
+            currentQuestion: {
+                id: 'q1',
+                title: '下列哪一個是台灣最高峰？',
+                options: ['玉山', '雪山', '陽明山', '合歡山'],
+                correctIndex: 0,
+                isLocked: false,
+                showResults: true,
+                showCorrectAnswer: false
+            },
+            responses: [], // Array of { studentName, optionIndex, timestamp }
+            isCloudConnected: false
+        };
+
+        // Initialize Firebase safely
+        if (firebaseConfig) {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                const initAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    currentUser = auth.currentUser;
+                    window.AppState.isCloudConnected = true;
+                    initRealtimeSync();
+                    updateCloudBadge();
+                };
+                initAuth().catch(err => {
+                    console.warn("Firebase Auth fallback to local mode:", err);
+                    updateCloudBadge();
+                });
+            } catch (e) {
+                console.warn("Firestore init warning, running with memory fallback", e);
+                updateCloudBadge();
+            }
+        } else {
+            updateCloudBadge();
+        }
+
+        function updateCloudBadge() {
+            const badge = document.getElementById('cloud-status');
+            if (badge) {
+                if (window.AppState.isCloudConnected) {
+                    badge.innerHTML = `<span class="flex h-2 w-2 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span></span> 雲端數據同步中`;
+                    badge.className = "px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5";
+                } else {
+                    badge.innerHTML = `<span class="h-2 w-2 rounded-full bg-amber-500"></span> 本地展示模式 (模擬多端)`;
+                    badge.className = "px-2.5 py-1 text-xs font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5";
+                }
+            }
+        }
+
+        // Firestore Realtime Listeners
+        function initRealtimeSync() {
+            if (!db || !currentUser) return;
+
+            // Room Question Doc Path
+            const qDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode);
+            
+            onSnapshot(qDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.question) {
+                        window.AppState.currentQuestion = data.question;
+                        window.renderApp();
+                    }
+                } else {
+                    // Seed initial question to room
+                    setDoc(qDocRef, { question: window.AppState.currentQuestion });
+                }
+            }, (err) => console.error("Question listener error:", err));
+
+            // Answers Collection Path
+            const answersColRef = collection(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode, 'answers');
+            
+            onSnapshot(answersColRef, (snapshot) => {
+                const responses = [];
+                snapshot.forEach((doc) => {
+                    responses.push(doc.data());
+                });
+                window.AppState.responses = responses;
+                window.renderApp();
+            }, (err) => console.error("Answers listener error:", err));
+        }
+
+        window.syncQuestionToCloud = async function() {
+            if (!db || !currentUser) return;
+            try {
+                const qDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode);
+                await setDoc(qDocRef, { question: window.AppState.currentQuestion }, { merge: true });
+            } catch(e) { console.error("Cloud sync error:", e); }
+        };
+
+        window.submitAnswerToCloud = async function(studentName, optionIndex) {
+            if (!db || !currentUser) return;
+            try {
+                const answersColRef = collection(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode, 'answers');
+                const docId = studentName.trim().toLowerCase().replace(/\s+/g, '_');
+                const ansDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode, 'answers', docId);
+                await setDoc(ansDocRef, {
+                    studentName: studentName,
+                    optionIndex: optionIndex,
+                    timestamp: Date.now()
+                });
+            } catch(e) { console.error("Cloud submit error:", e); }
+        };
+
+        window.clearAnswersInCloud = async function() {
+            if (!db || !currentUser) return;
+            try {
+                const answersColRef = collection(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode, 'answers');
+                const snapshot = await getDocs(answersColRef);
+                snapshot.forEach(async (d) => {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', window.AppState.roomCode, 'answers', d.id));
+                });
+            } catch(e) { console.error("Cloud clear error:", e); }
+        };
+    </script>
+
+    <!-- Navigation Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-md shadow-indigo-200">
+                    <i class="fa-solid font-bold fa-chart-column text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="font-extrabold text-lg text-slate-900 leading-none">ClassPulse</h1>
+                    <p class="text-xs text-slate-500 font-medium mt-0.5">互動課堂即時問答系統</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-3">
+                <div id="cloud-status" class="px-2.5 py-1 text-xs font-semibold rounded-full bg-slate-100 text-slate-600 flex items-center gap-1.5">
+                    <span class="h-2 w-2 rounded-full bg-slate-400"></span> 載入中...
+                </div>
+
+                <!-- Role Switcher Segmented Control -->
+                <div class="bg-slate-100 p-1 rounded-xl flex items-center border border-slate-200 text-xs font-bold">
+                    <button onclick="switchRole('teacher')" id="btn-role-teacher" class="px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shadow-xs bg-white text-indigo-600 font-bold">
+                        <i class="fa-solid fa-chalkboard-user"></i>
+                        <span>教師控台</span>
+                    </button>
+                    <button onclick="switchRole('student')" id="btn-role-student" class="px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900">
+                        <i class="fa-solid fa-user-graduate"></i>
+                        <span>學生端</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+        <!-- TEACHER VIEW -->
+        <div id="teacher-view" class="space-y-6">
+            <!-- Top Controls Bar -->
+            <div class="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div class="flex items-center space-x-4">
+                    <div class="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-center min-w-[100px]">
+                        <span class="text-xs uppercase font-bold text-indigo-600 tracking-wider block">房間號碼</span>
+                        <span class="text-2xl font-black text-indigo-900 font-mono" id="display-room-code">8888</span>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
+                            <span>當前測試題型</span>
+                            <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-semibold">單選題</span>
+                        </h2>
+                        <p class="text-sm text-slate-500 mt-0.5">學生可掃碼或輸入房間號加入作答，數據實時匯總</p>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="toggleLockQuestion()" id="btn-lock" class="px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold flex items-center gap-2 transition-all">
+                        <i class="fa-solid fa-lock"></i>
+                        <span id="txt-lock">停止作答</span>
+                    </button>
+
+                    <button onclick="toggleShowCorrectAnswer()" id="btn-reveal" class="px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold flex items-center gap-2 transition-all">
+                        <i class="fa-solid fa-eye"></i>
+                        <span id="txt-reveal">公布答案</span>
+                    </button>
+
+                    <button onclick="openQuestionModal()" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center gap-2 shadow-sm transition-all">
+                        <i class="fa-solid fa-plus"></i>
+                        <span>編輯/出新題目</span>
+                    </button>
+                    
+                    <button onclick="simulateStudentAnswers(5)" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold flex items-center gap-2 shadow-sm transition-all" title="自動模擬 5 位學生作答，方便快速測試">
+                        <i class="fa-solid fa-robot"></i>
+                        <span>模擬 +5 人作答</span>
+                    </button>
+
+                    <button onclick="resetResponses()" class="px-3 py-2 rounded-xl border border-rose-200 hover:bg-rose-50 text-rose-600 text-sm font-semibold flex items-center gap-1.5 transition-all" title="清空回答紀錄">
+                        <i class="fa-solid fa-rotate-right"></i>
+                        <span>重設數據</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Dashboard Analytics Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Left: Question Info & Quick Live View -->
+                <div class="lg:col-span-1 space-y-6">
+                    <!-- Current Active Question Card -->
+                    <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">題目內容</span>
+                            <span id="status-badge" class="px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-100 text-emerald-800">
+                                正在進行作答
+                            </span>
+                        </div>
+                        <h3 class="text-xl font-extrabold text-slate-900 leading-snug mb-6" id="teacher-q-title">
+                            載入題目中...
+                        </h3>
+
+                        <!-- Option List Preview -->
+                        <div class="space-y-2.5" id="teacher-q-options">
+                            <!-- Options will be dynamically rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Room QR Code / Student Link Simulation -->
+                    <div class="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden">
+                        <div class="relative z-10 flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-bold text-indigo-300 uppercase tracking-widest">學生快速加入</p>
+                                <h4 class="text-2xl font-black mt-1">進入代碼: <span class="text-indigo-400 font-mono" id="qr-room-code">8888</span></h4>
+                                <p class="text-xs text-slate-300 mt-2">請學生切換至「學生端」輸入代碼即可參與</p>
+                            </div>
+                            <div class="bg-white p-2.5 rounded-xl text-slate-900 text-center shadow-lg">
+                                <i class="fa-solid fa-qrcode text-5xl text-slate-800"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Live Chart & Detailed Responses -->
+                <div class="lg:col-span-2 space-y-6">
+                    <!-- Dynamic Live Chart Box -->
+                    <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
+                            <div>
+                                <h3 class="text-lg font-bold text-slate-900">即時選項統計圖表</h3>
+                                <p class="text-xs text-slate-500">數據隨學生遞交答案即時更新</p>
+                            </div>
+                            <div class="flex items-center space-x-4 bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
+                                <div class="text-center">
+                                    <span class="text-xs text-slate-400 block font-semibold">總作答人數</span>
+                                    <span class="text-xl font-black text-indigo-600" id="total-count">0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Chart Canvas Container -->
+                        <div class="relative h-64 sm:h-72 w-full">
+                            <canvas id="liveChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Detailed Student Response List -->
+                    <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-md font-bold text-slate-900 flex items-center gap-2">
+                                <i class="fa-solid fa-list-check text-indigo-500"></i>
+                                <span>學生回答明細</span>
+                            </h3>
+                            <span class="text-xs font-medium text-slate-500" id="response-list-count">共 0 筆記錄</span>
+                        </div>
+
+                        <div class="overflow-x-auto max-h-60 overflow-y-auto pr-1">
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-slate-50 text-slate-500 text-xs uppercase sticky top-0">
+                                    <tr>
+                                        <th class="py-2.5 px-3 rounded-l-lg font-semibold">學生姓名/學號</th>
+                                        <th class="py-2.5 px-3 font-semibold">選擇答案</th>
+                                        <th class="py-2.5 px-3 rounded-r-lg font-semibold text-right">提交時間</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="response-table-body" class="divide-y divide-slate-100">
+                                    <tr>
+                                        <td colspan="3" class="text-center py-6 text-slate-400 text-xs">尚無作答紀錄</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- STUDENT VIEW -->
+        <div id="student-view" class="hidden max-w-xl mx-auto space-y-6">
+            <!-- Student Login / Room Join Form (Visible before joining) -->
+            <div id="student-login-card" class="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-md text-center space-y-6">
+                <div class="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-2xl font-bold shadow-inner">
+                    <i class="fa-solid fa-graduation-cap"></i>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-black text-slate-900">加入課堂問答</h2>
+                    <p class="text-sm text-slate-500 mt-1">請輸入教師提供的房間代碼與您的姓名</p>
+                </div>
+
+                <form onsubmit="handleStudentJoin(event)" class="space-y-4 text-left">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">房間代碼</label>
+                        <input type="text" id="input-room-code" value="8888" required class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-center text-lg font-bold uppercase tracking-widest" placeholder="例如: 8888">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">您的姓名 / 學號</label>
+                        <input type="text" id="input-student-name" required class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="例如: 王小明">
+                    </div>
+                    <button type="submit" class="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition-all text-center">
+                        進入房間開始作答
+                    </button>
+                </form>
+            </div>
+
+            <!-- Student Active Question Portal (Visible after joining) -->
+            <div id="student-quiz-card" class="hidden space-y-6">
+                <!-- Header Info -->
+                <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-9 h-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm">
+                            <i class="fa-solid fa-user"></i>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-400 font-semibold">目前學生</p>
+                            <p class="text-sm font-bold text-slate-800" id="student-display-name">--</p>
+                        </div>
+                    </div>
+                    <button onclick="studentLeaveRoom()" class="text-xs text-slate-400 hover:text-slate-600 font-medium px-2.5 py-1.5 rounded-lg border border-slate-200">
+                        退出房間
+                    </button>
+                </div>
+
+                <!-- Active Question Box -->
+                <div class="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-md relative overflow-hidden">
+                    <div class="flex items-center justify-between mb-4">
+                        <span class="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full uppercase tracking-wider">
+                            問題 1
+                        </span>
+                        <span id="student-status-badge" class="text-xs font-semibold text-slate-500">
+                            進行中
+                        </span>
+                    </div>
+
+                    <h3 class="text-xl sm:text-2xl font-extrabold text-slate-900 leading-snug mb-8" id="student-q-title">
+                        題目載入中...
+                    </h3>
+
+                    <!-- Interactive Options Selection -->
+                    <div class="space-y-3.5" id="student-options-container">
+                        <!-- Student options cards dynamically inserted here -->
+                    </div>
+
+                    <!-- Submission Overlay Feedback -->
+                    <div id="student-submitted-feedback" class="hidden mt-6 p-4 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-900 text-center space-y-2">
+                        <i class="fa-solid fa-circle-check text-indigo-600 text-3xl"></i>
+                        <p class="font-bold text-sm">答案已成功傳送！</p>
+                        <p class="text-xs text-indigo-600">等待教師公佈統計結果或解鎖題目...</p>
+                    </div>
+                </div>
+
+                <!-- Live Results View for Student (If Teacher set showResults = true) -->
+                <div id="student-live-results" class="hidden bg-white rounded-3xl p-6 border border-slate-200 shadow-md space-y-4">
+                    <h4 class="text-md font-bold text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-pie text-indigo-500"></i>
+                        <span>全班統計結果</span>
+                    </h4>
+                    <div class="relative h-56 w-full">
+                        <canvas id="studentChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal for Teacher Creating/Editing Question -->
+    <div id="question-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-6">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                <h3 class="text-xl font-bold text-slate-900">編輯 / 發佈新題目</h3>
+                <button onclick="closeQuestionModal()" class="text-slate-400 hover:text-slate-600 text-lg">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <form onsubmit="saveQuestion(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">題目名稱</label>
+                    <textarea id="modal-q-title" rows="2" required class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 text-sm" placeholder="例如：下列哪一個是台灣最高峰？"></textarea>
+                </div>
+
+                <div class="space-y-3">
+                    <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">選項與正確答案設定</label>
+                    <div id="modal-options-list" class="space-y-2">
+                        <!-- Dynamic Options inputs -->
+                    </div>
+                </div>
+
+                <div class="pt-4 flex items-center justify-end space-x-3 border-t border-slate-100">
+                    <button type="button" onclick="closeQuestionModal()" class="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50">
+                        取消
+                    </button>
+                    <button type="submit" class="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 shadow-md">
+                        發佈新題目 (重置統計)
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Application Controller Logic -->
+    <script>
+        let teacherChartInstance = null;
+        let studentChartInstance = null;
+
+        // Main Render Loop
+        window.renderApp = function() {
+            const state = window.AppState;
+
+            // Render Header Segmented Switcher
+            const btnTeacher = document.getElementById('btn-role-teacher');
+            const btnStudent = document.getElementById('btn-role-student');
+            const teacherView = document.getElementById('teacher-view');
+            const studentView = document.getElementById('student-view');
+
+            if (state.role === 'teacher') {
+                btnTeacher.className = "px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shadow-xs bg-white text-indigo-600 font-bold";
+                btnStudent.className = "px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900";
+                teacherView.classList.remove('hidden');
+                studentView.classList.add('hidden');
+                renderTeacherDashboard();
+            } else {
+                btnStudent.className = "px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shadow-xs bg-white text-indigo-600 font-bold";
+                btnTeacher.className = "px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900";
+                teacherView.classList.add('hidden');
+                studentView.classList.remove('hidden');
+                renderStudentPortal();
+            }
+        };
+
+        window.switchRole = function(role) {
+            window.AppState.role = role;
+            window.renderApp();
+        };
+
+        // --- TEACHER CONTROLLER ---
+        function renderTeacherDashboard() {
+            const q = window.AppState.currentQuestion;
+            const responses = window.AppState.responses || [];
+
+            document.getElementById('display-room-code').innerText = window.AppState.roomCode;
+            document.getElementById('qr-room-code').innerText = window.AppState.roomCode;
+            document.getElementById('teacher-q-title').innerText = q.title;
+
+            // Buttons state
+            const btnLock = document.getElementById('btn-lock');
+            const txtLock = document.getElementById('txt-lock');
+            if (q.isLocked) {
+                txtLock.innerText = "解鎖作答";
+                btnLock.className = "px-3.5 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm font-semibold flex items-center gap-2 transition-all";
+            } else {
+                txtLock.innerText = "停止作答";
+                btnLock.className = "px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold flex items-center gap-2 transition-all";
+            }
+
+            const txtReveal = document.getElementById('txt-reveal');
+            txtReveal.innerText = q.showCorrectAnswer ? "隱藏答案" : "公佈答案";
+
+            const statusBadge = document.getElementById('status-badge');
+            if (q.isLocked) {
+                statusBadge.innerText = "已停止作答";
+                statusBadge.className = "px-2.5 py-1 text-xs font-bold rounded-full bg-slate-100 text-slate-600";
+            } else {
+                statusBadge.innerText = "正在進行作答";
+                statusBadge.className = "px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-100 text-emerald-800";
+            }
+
+            // Options list render
+            const optContainer = document.getElementById('teacher-q-options');
+            optContainer.innerHTML = q.options.map((opt, idx) => {
+                const optionLetter = String.fromCharCode(65 + idx);
+                const isCorrect = q.showCorrectAnswer && idx === q.correctIndex;
+                return `
+                    <div class="p-3 rounded-xl border ${isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900 font-bold' : 'border-slate-200 bg-slate-50 text-slate-700'} flex items-center justify-between transition-all">
+                        <div class="flex items-center space-x-3">
+                            <span class="w-7 h-7 rounded-lg ${isCorrect ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 border border-slate-200'} flex items-center justify-center font-bold text-xs">${optionLetter}</span>
+                            <span class="text-sm font-medium">${opt}</span>
+                        </div>
+                        ${isCorrect ? '<i class="fa-solid fa-circle-check text-emerald-600"></i>' : ''}
+                    </div>
+                `;
+            }).join('');
+
+            // Total count
+            document.getElementById('total-count').innerText = responses.length;
+
+            // Render Responses Table
+            renderResponsesTable(responses, q);
+
+            // Render Chart
+            renderChart('liveChart', q, responses, (chart) => { teacherChartInstance = chart; });
+        }
+
+        function renderResponsesTable(responses, q) {
+            const tbody = document.getElementById('response-table-body');
+            document.getElementById('response-list-count').innerText = `共 ${responses.length} 筆記錄`;
+
+            if (!responses || responses.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="text-center py-6 text-slate-400 text-xs">尚無學生提交數據</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = responses.map(r => {
+                const optLetter = String.fromCharCode(65 + r.optionIndex);
+                const optText = q.options[r.optionIndex] || `選項 ${optLetter}`;
+                const timeStr = r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : '剛剛';
+                return `
+                    <tr class="hover:bg-slate-50/80 transition-colors">
+                        <td class="py-2.5 px-3 font-semibold text-slate-800">${escapeHtml(r.studentName)}</td>
+                        <td class="py-2.5 px-3">
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-xs font-bold">
+                                <span>${optLetter}.</span>
+                                <span class="font-normal truncate max-w-[120px]">${escapeHtml(optText)}</span>
+                            </span>
+                        </td>
+                        <td class="py-2.5 px-3 text-right text-xs text-slate-400 font-mono">${timeStr}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Action Handlers for Teacher
+        window.toggleLockQuestion = function() {
+            window.AppState.currentQuestion.isLocked = !window.AppState.currentQuestion.isLocked;
+            if (window.syncQuestionToCloud) window.syncQuestionToCloud();
+            window.renderApp();
+        };
+
+        window.toggleShowCorrectAnswer = function() {
+            window.AppState.currentQuestion.showCorrectAnswer = !window.AppState.currentQuestion.showCorrectAnswer;
+            if (window.AppState.currentQuestion.showCorrectAnswer) {
+                triggerConfetti();
+            }
+            if (window.syncQuestionToCloud) window.syncQuestionToCloud();
+            window.renderApp();
+        };
+
+        window.resetResponses = function() {
+            window.AppState.responses = [];
+            window.AppState.hasSubmitted = false;
+            window.AppState.selectedOption = null;
+            if (window.clearAnswersInCloud) window.clearAnswersInCloud();
+            window.renderApp();
+        };
+
+        window.simulateStudentAnswers = function(count = 5) {
+            const names = ['陳小明', '林雅婷', '張家豪', '許智捷', '黃品睿', '蔡宜蓁', '吳冠宇', '鄭心怡', '郭宇軒', '曾佩君'];
+            const q = window.AppState.currentQuestion;
+
+            for (let i = 0; i < count; i++) {
+                const randomName = names[Math.floor(Math.random() * names.length)] + Math.floor(Math.random() * 90 + 10);
+                const randomOption = Math.floor(Math.random() * q.options.length);
+
+                if (window.AppState.isCloudConnected && window.submitAnswerToCloud) {
+                    window.submitAnswerToCloud(randomName, randomOption);
+                } else {
+                    window.AppState.responses.push({
+                        studentName: randomName,
+                        optionIndex: randomOption,
+                        timestamp: Date.now()
+                    });
+                }
+            }
+            window.renderApp();
+        };
+
+        // --- STUDENT CONTROLLER ---
+        function renderStudentPortal() {
+            const loginCard = document.getElementById('student-login-card');
+            const quizCard = document.getElementById('student-quiz-card');
+            const state = window.AppState;
+
+            if (!state.studentName) {
+                loginCard.classList.remove('hidden');
+                quizCard.classList.add('hidden');
+                return;
+            }
+
+            loginCard.classList.add('hidden');
+            quizCard.classList.remove('hidden');
+
+            document.getElementById('student-display-name').innerText = state.studentName;
+
+            const q = state.currentQuestion;
+            document.getElementById('student-q-title').innerText = q.title;
+
+            // Student Status Badge
+            const badge = document.getElementById('student-status-badge');
+            if (q.isLocked) {
+                badge.innerText = "答題已結束";
+                badge.className = "text-xs font-semibold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-500";
+            } else {
+                badge.innerText = "進行中";
+                badge.className = "text-xs font-semibold px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700";
+            }
+
+            // Options List Render
+            const container = document.getElementById('student-options-container');
+            container.innerHTML = q.options.map((opt, idx) => {
+                const letter = String.fromCharCode(65 + idx);
+                const isSelected = state.selectedOption === idx;
+                const isDisabled = q.isLocked;
+
+                let cardClasses = "p-4 rounded-2xl border-2 transition-all flex items-center justify-between cursor-pointer ";
+                if (isSelected) {
+                    cardClasses += "border-indigo-600 bg-indigo-50/80 text-indigo-900 shadow-sm ";
+                } else {
+                    cardClasses += "border-slate-200 hover:border-indigo-300 hover:bg-slate-50 text-slate-700 ";
+                }
+
+                if (isDisabled) {
+                    cardClasses += "opacity-70 cursor-not-allowed ";
+                }
+
+                return `
+                    <div onclick="selectStudentOption(${idx})" class="${cardClasses}">
+                        <div class="flex items-center space-x-3.5">
+                            <span class="w-8 h-8 rounded-xl ${isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'} flex items-center justify-center font-extrabold text-sm">${letter}</span>
+                            <span class="font-semibold text-base">${opt}</span>
+                        </div>
+                        ${isSelected ? '<i class="fa-solid fa-circle-check text-indigo-600 text-xl"></i>' : '<div class="w-5 h-5 rounded-full border-2 border-slate-300"></div>'}
+                    </div>
+                `;
+            }).join('');
+
+            // Feedback & Results section
+            const feedback = document.getElementById('student-submitted-feedback');
+            if (state.hasSubmitted) {
+                feedback.classList.remove('hidden');
+            } else {
+                feedback.classList.add('hidden');
+            }
+
+            // Results Chart View for student if unlocked
+            const liveResultsBox = document.getElementById('student-live-results');
+            if (q.showResults || q.showCorrectAnswer) {
+                liveResultsBox.classList.remove('hidden');
+                renderChart('studentChart', q, state.responses, (chart) => { studentChartInstance = chart; });
+            } else {
+                liveResultsBox.classList.add('hidden');
+            }
+        }
+
+        window.handleStudentJoin = function(e) {
+            e.preventDefault();
+            const code = document.getElementById('input-room-code').value.trim();
+            const name = document.getElementById('input-student-name').value.trim();
+
+            if (code && name) {
+                window.AppState.roomCode = code;
+                window.AppState.studentName = name;
+                window.renderApp();
+            }
+        };
+
+        window.studentLeaveRoom = function() {
+            window.AppState.studentName = '';
+            window.AppState.hasSubmitted = false;
+            window.AppState.selectedOption = null;
+            window.renderApp();
+        };
+
+        window.selectStudentOption = function(idx) {
+            const q = window.AppState.currentQuestion;
+            if (q.isLocked) return;
+
+            window.AppState.selectedOption = idx;
+            window.AppState.hasSubmitted = true;
+
+            if (window.AppState.isCloudConnected && window.submitAnswerToCloud) {
+                window.submitAnswerToCloud(window.AppState.studentName, idx);
+            } else {
+                // Local memory update
+                const existingIdx = window.AppState.responses.findIndex(r => r.studentName === window.AppState.studentName);
+                if (existingIdx >= 0) {
+                    window.AppState.responses[existingIdx].optionIndex = idx;
+                    window.AppState.responses[existingIdx].timestamp = Date.now();
+                } else {
+                    window.AppState.responses.push({
+                        studentName: window.AppState.studentName,
+                        optionIndex: idx,
+                        timestamp: Date.now()
+                    });
+                }
+            }
+
+            window.renderApp();
+        };
+
+        // --- CHART RENDERING (Chart.js) ---
+        function renderChart(canvasId, question, responses, saveInstanceFn) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const total = responses.length || 0;
+
+            // Calculate Counts for each option
+            const counts = question.options.map((_, idx) => {
+                return responses.filter(r => r.optionIndex === idx).length;
+            });
+
+            const labels = question.options.map((opt, idx) => {
+                const letter = String.fromCharCode(65 + idx);
+                const count = counts[idx];
+                const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                return `${letter}. ${opt} (${pct}%)`;
+            });
+
+            const backgroundColors = question.options.map((_, idx) => {
+                if (question.showCorrectAnswer && idx === question.correctIndex) {
+                    return 'rgba(16, 185, 129, 0.85)'; // Emerald for correct
+                }
+                return 'rgba(79, 70, 229, 0.85)'; // Indigo theme
+            });
+
+            // Destroy existing instance if any
+            if (canvasId === 'liveChart' && teacherChartInstance) teacherChartInstance.destroy();
+            if (canvasId === 'studentChart' && studentChartInstance) studentChartInstance.destroy();
+
+            const newChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '人數',
+                        data: counts,
+                        backgroundColor: backgroundColors,
+                        borderRadius: 8,
+                        borderSkipped: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => ` 選擇人數: ${ctx.raw} 人`
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 },
+                            grid: { color: 'rgba(241, 245, 249, 1)' }
+                        },
+                        x: {
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+
+            saveInstanceFn(newChart);
+        }
+
+        // --- EDIT QUESTION MODAL ---
+        window.openQuestionModal = function() {
+            const q = window.AppState.currentQuestion;
+            document.getElementById('modal-q-title').value = q.title;
+
+            const modalOptList = document.getElementById('modal-options-list');
+            modalOptList.innerHTML = q.options.map((opt, idx) => `
+                <div class="flex items-center space-x-2">
+                    <input type="radio" name="correct-opt" value="${idx}" ${idx === q.correctIndex ? 'checked' : ''} class="w-4 h-4 text-indigo-600 focus:ring-indigo-500">
+                    <input type="text" class="modal-option-input w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" value="${opt}" placeholder="選項 ${String.fromCharCode(65 + idx)}">
+                </div>
+            `).join('');
+
+            document.getElementById('question-modal').classList.remove('hidden');
+        };
+
+        window.closeQuestionModal = function() {
+            document.getElementById('question-modal').classList.add('hidden');
+        };
+
+        window.saveQuestion = function(e) {
+            e.preventDefault();
+            const title = document.getElementById('modal-q-title').value.trim();
+            const inputs = document.querySelectorAll('.modal-option-input');
+            const selectedRadio = document.querySelector('input[name="correct-opt"]:checked');
+
+            const options = Array.from(inputs).map(i => i.value.trim()).filter(v => v !== '');
+            const correctIndex = selectedRadio ? parseInt(selectedRadio.value) : 0;
+
+            if (title && options.length >= 2) {
+                window.AppState.currentQuestion = {
+                    id: 'q_' + Date.now(),
+                    title: title,
+                    options: options,
+                    correctIndex: correctIndex,
+                    isLocked: false,
+                    showResults: true,
+                    showCorrectAnswer: false
+                };
+                window.AppState.responses = [];
+                window.AppState.hasSubmitted = false;
+                window.AppState.selectedOption = null;
+
+                if (window.syncQuestionToCloud) window.syncQuestionToCloud();
+                if (window.clearAnswersInCloud) window.clearAnswersInCloud();
+
+                closeQuestionModal();
+                window.renderApp();
+            }
+        };
+
+        // --- UTILS & ANIMATION ---
+        function triggerConfetti() {
+            if (typeof confetti === 'function') {
+                confetti({
+                    particleCount: 80,
+                    spread: 70,
+                    origin: { y: 0.6 }
+                });
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // Initialize App on Page Load
+        window.addEventListener('DOMContentLoaded', () => {
+            window.renderApp();
+        });
+    </script>
+</body>
+</html>
