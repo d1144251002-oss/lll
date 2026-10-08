@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<imdex.html>
 <html lang="zh-TW" class="h-full">
 <head>
     <meta charset="UTF-8">
