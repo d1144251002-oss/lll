@@ -86,7 +86,7 @@
     <script>
         // --- 1. Supabase Client 初始化配置 ---
         const SUPABASE_URL = "https://yqrytizwuwgxpkqyyymd.supabase.co/rest/v1/";
-        const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlxcnl0aXp3dXdneHBrcXl5eW1kIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTk3MzUzOCwiZXhwIjoyMTA3NTQ5NTM4fQ.H6-XJZrKsv4zy_M5PUMWntvCp7lEJEufUpKUb96BF3I";
+        const SUPABASE_KEY = "sb_publishable_jydU8c5DZMBHuKLFuK2JOg_ZjmncLwU";
         const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         // 全域狀態控制變數
