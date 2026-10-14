@@ -3,141 +3,178 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>互動式課堂問答系統</title>
-    <!-- Tailwind CSS (樣式庫) -->
+    <title>學生作答系統 - ClassPoll</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- FontAwesome (圖示庫) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Chart.js (圖表庫) -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Firebase JS SDK (雲端即時同步) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
 <body class="bg-slate-100 font-sans min-h-screen text-slate-800">
 
-    <!-- 頂部導覽列 -->
-    <nav class="bg-indigo-600 text-white shadow-md">
-        <div class="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
+    <nav class="bg-emerald-600 text-white shadow-md">
+        <div class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center">
             <div class="flex items-center space-x-2">
-                <i class="fa-solid fa-graduation-cap text-2xl"></i>
-                <span class="font-bold text-xl tracking-wide">ClassPoll 課堂即時問答</span>
+                <i class="fa-solid fa-user-graduate text-2xl"></i>
+                <span class="font-bold text-xl tracking-wide">ClassPoll 學生作答</span>
             </div>
-            <div id="userBadge" class="hidden text-sm bg-indigo-700 px-3 py-1 rounded-full flex items-center gap-2">
-                <span id="roleLabel" class="font-semibold"></span>
-                <span id="nameLabel" class="text-indigo-200"></span>
+            <div id="userBadge" class="hidden text-sm bg-emerald-700 px-3 py-1 rounded-full flex items-center gap-2">
+                <span id="nameLabel" class="font-semibold"></span>
+                <button onclick="leaveRoom()" class="text-xs bg-emerald-800 hover:bg-emerald-900 px-2 py-0.5 rounded ml-2">切換教室</button>
             </div>
         </div>
     </nav>
 
-    <!-- 主要內容區 -->
-    <div class="max-w-4xl mx-auto p-4 md:p-6">
+    <div class="max-w-md mx-auto p-4 md:p-6">
 
-        <!-- 角色選擇頁面 (初始) -->
-        <div id="roleSelectScreen" class="bg-white p-6 md:p-10 rounded-2xl shadow-lg text-center mt-8">
-            <h1 class="text-3xl font-extrabold text-slate-800 mb-3">歡迎使用即時問答系統</h1>
-            <p class="text-slate-500 mb-8">請選擇您的身分以開始使用</p>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-lg mx-auto">
-                <button onclick="selectRole('teacher')" class="p-6 border-2 border-indigo-200 hover:border-indigo-500 rounded-xl bg-indigo-50 hover:bg-indigo-100 transition duration-200 text-indigo-700 font-bold text-lg flex flex-col items-center gap-3">
-                    <i class="fa-solid fa-chalkboard-user text-4xl"></i>
-                    我是教師 (建立與主持問答)
-                </button>
-                <button onclick="selectRole('student')" class="p-6 border-2 border-emerald-200 hover:border-emerald-500 rounded-xl bg-emerald-50 hover:bg-emerald-100 transition duration-200 text-emerald-700 font-bold text-lg flex flex-col items-center gap-3">
-                    <i class="fa-solid fa-user-graduate text-4xl"></i>
-                    我是學生 (加入與回答問題)
-                </button>
-            </div>
-        </div>
-
-        <!-- 登入與教室碼輸入視窗 -->
-        <div id="loginScreen" class="hidden bg-white p-6 md:p-8 rounded-2xl shadow-lg max-w-md mx-auto mt-8">
-            <h2 id="loginTitle" class="text-2xl font-bold mb-6 text-center text-slate-800">登入系統</h2>
+        <!-- 登入卡片 -->
+        <div id="loginScreen" class="bg-white p-6 md:p-8 rounded-2xl shadow-lg mt-8">
+            <h2 class="text-2xl font-bold mb-6 text-center text-slate-800">加入課堂問答</h2>
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-1">您的名稱</label>
-                    <input type="text" id="usernameInput" placeholder="例如: 王小明 或 張老師" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">您的姓名 / 學號</label>
+                    <input type="text" id="usernameInput" placeholder="例如: 王小明" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 mb-1">教室代碼 (Room Code)</label>
-                    <input type="text" id="roomCodeInput" placeholder="例如: 888" value="888" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-mono tracking-wider">
+                    <input type="text" id="roomCodeInput" placeholder="例如: 888" value="888" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none uppercase font-mono tracking-wider">
                 </div>
-                <button onclick="enterRoom()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg shadow-md transition duration-200">
+                <button onclick="enterRoom()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow-md transition duration-200">
                     進入教室
-                </button>
-                <button onclick="backToRoleSelect()" class="w-full text-slate-500 hover:text-slate-700 text-sm py-2">
-                    ← 返回選擇角色
                 </button>
             </div>
         </div>
 
-        <!-- 【教師控制台】 -->
-        <div id="teacherDashboard" class="hidden space-y-6">
-            <!-- 教室資訊卡片 -->
-            <div class="bg-indigo-900 text-white p-6 rounded-2xl shadow-md flex flex-wrap justify-between items-center gap-4">
-                <div>
-                    <span class="text-indigo-300 text-sm font-medium">當前教室代碼</span>
-                    <div class="text-3xl font-black font-mono tracking-widest text-amber-300" id="teacherRoomCodeDisplay">---</div>
-                </div>
-                <div class="flex items-center gap-3">
-                    <button onclick="generateBotAnswers()" class="bg-indigo-700 hover:bg-indigo-600 text-indigo-100 text-sm px-4 py-2 rounded-lg transition border border-indigo-500">
-                        <i class="fa-solid fa-robot mr-1"></i> 模擬 5 位學生回答
-                    </button>
-                    <button onclick="clearCurrentAnswers()" class="bg-rose-600 hover:bg-rose-700 text-white text-sm px-4 py-2 rounded-lg transition">
-                        <i class="fa-solid fa-trash mr-1"></i> 清除本次回答
-                    </button>
-                </div>
+        <!-- 學生答題主區域 -->
+        <div id="studentDashboard" class="hidden space-y-6 mt-4">
+            <div class="bg-emerald-700 text-white p-4 rounded-xl shadow flex justify-between items-center">
+                <span>教室代碼: <strong id="studentRoomCodeDisplay" class="font-mono text-xl">---</strong></span>
+                <span class="text-xs bg-emerald-800 px-2.5 py-1 rounded-full font-bold flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse"></span> 雲端連線中
+                </span>
             </div>
 
-            <!-- 出題區域 -->
-            <div class="bg-white p-6 rounded-2xl shadow-md">
-                <h3 class="text-lg font-bold mb-4 text-slate-800 border-b pb-2">
-                    <i class="fa-solid fa-pen-to-square text-indigo-600 mr-2"></i>發布新題目
-                </h3>
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-1">題目內容</label>
-                        <input type="text" id="questionInput" value="請問下列何者是台灣最高的山？" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
-                    </div>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                            <label class="block text-xs text-slate-500 mb-1">選項 A</label>
-                            <input type="text" id="optA" value="玉山" class="w-full px-3 py-2 border rounded-lg text-sm">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-slate-500 mb-1">選項 B</label>
-                            <input type="text" id="optB" value="雪山" class="w-full px-3 py-2 border rounded-lg text-sm">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-slate-500 mb-1">選項 C</label>
-                            <input type="text" id="optC" value="陽明山" class="w-full px-3 py-2 border rounded-lg text-sm">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-slate-500 mb-1">選項 D</label>
-                            <input type="text" id="optD" value="阿里山" class="w-full px-3 py-2 border rounded-lg text-sm">
-                        </div>
-                    </div>
-
-                    <button onclick="publishQuestion()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow-md transition">
-                        <i class="fa-solid fa-paper-plane mr-2"></i>推播題目給學生
-                    </button>
-                </div>
+            <!-- 等待題目 -->
+            <div id="waitingForQuestion" class="bg-white p-8 rounded-2xl shadow-md text-center py-12">
+                <i class="fa-solid fa-spinner fa-spin text-4xl text-emerald-500 mb-4"></i>
+                <h3 class="text-xl font-bold text-slate-700">等待老師發布題目中...</h3>
+                <p class="text-slate-400 text-sm mt-2">請保持此頁面開啟，老師發布題目後會自動即時同步。</p>
             </div>
 
-            <!-- 實時統計數據 -->
-            <div class="bg-white p-6 rounded-2xl shadow-md">
-                <div class="flex justify-between items-center mb-4 border-b pb-2">
-                    <h3 class="text-lg font-bold text-slate-800">
-                        <i class="fa-solid fa-chart-column text-indigo-600 mr-2"></i>實時答題統計
-                    </h3>
-                    <span class="text-sm bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold">
-                        已回答人數: <span id="totalRespondedCount" class="text-indigo-600 text-base">0</span> 人
-                    </span>
-                </div>
+            <!-- 答題卡片 -->
+            <div id="studentQuestionCard" class="hidden bg-white p-6 rounded-2xl shadow-md">
+                <span class="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full">單選題</span>
+                <h2 id="displayQuestionText" class="text-xl font-bold text-slate-800 my-4">---</h2>
 
-                <div class="w-full max-w-md mx-auto my-4">
-                    <canvas id="pollChart"></canvas>
-                </div>
+                <div id="optionsContainer" class="space-y-3"></div>
 
-                <!-- 答題名單列表 -->
-                <div class="mt-6">
-                    <h4 class="text-sm font-semibold text-slate-600 mb-2">已提交答案的學生明細：</h4>
-                    <div id="studentResponsesList" class="max-h-40 overflow-y-auto space-y-1 bg-slate-50 p-3 rounded-lg border
+                <div id="submittedNotice" class="hidden mt-6 bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl text-center">
+                    <i class="fa-solid fa-circle-check text-2xl text-emerald-500 mb-1"></i>
+                    <p class="font-bold">答案已即時傳送至老師端！</p>
+                    <p class="text-xs text-emerald-600 mt-1">您可以隨時點選其他選項修改答案。</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // 免費雲端 Firebase 配置
+        const firebaseConfig = {
+            databaseURL: "https://quiz-app-demo-default-rtdb.firebaseio.com/"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let currentUser = '';
+        let currentRoom = '';
+        let activeQuestion = null;
+        let roomRef = null;
+
+        function enterRoom() {
+            const name = document.getElementById('usernameInput').value.trim();
+            const room = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+
+            if (!name || !room) {
+                alert('請輸入姓名與教室代碼！');
+                return;
+            }
+
+            currentUser = name;
+            currentRoom = room;
+
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('userBadge').classList.remove('hidden');
+            document.getElementById('nameLabel').innerText = currentUser;
+            document.getElementById('studentDashboard').classList.remove('hidden');
+            document.getElementById('studentRoomCodeDisplay').innerText = currentRoom;
+
+            // 監聽雲端資料庫該教室的動態
+            listenToRoom(currentRoom);
+        }
+
+        function leaveRoom() {
+            if (roomRef) roomRef.off();
+            document.getElementById('studentDashboard').classList.add('hidden');
+            document.getElementById('userBadge').classList.add('hidden');
+            document.getElementById('loginScreen').classList.remove('hidden');
+        }
+
+        function listenToRoom(roomCode) {
+            if (roomRef) roomRef.off();
+            roomRef = db.ref(`rooms/${roomCode}`);
+
+            roomRef.on('value', (snapshot) => {
+                const data = snapshot.val() || {};
+                
+                if (data.activeQuestion) {
+                    activeQuestion = data.activeQuestion;
+                    const answers = data.answers || {};
+                    const myAnswer = answers[currentUser] || null;
+                    showStudentQuestion(activeQuestion, myAnswer);
+                } else {
+                    document.getElementById('waitingForQuestion').classList.remove('hidden');
+                    document.getElementById('studentQuestionCard').classList.add('hidden');
+                }
+            });
+        }
+
+        function showStudentQuestion(questionData, myAnswer) {
+            document.getElementById('waitingForQuestion').classList.add('hidden');
+            document.getElementById('studentQuestionCard').classList.remove('hidden');
+            document.getElementById('displayQuestionText').innerText = questionData.question;
+
+            const container = document.getElementById('optionsContainer');
+            container.innerHTML = '';
+
+            questionData.options.forEach((opt, index) => {
+                const btn = document.createElement('button');
+                const isSelected = myAnswer === opt;
+                btn.className = `w-full text-left p-4 rounded-xl border-2 transition font-medium flex justify-between items-center ${
+                    isSelected 
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-800 font-bold' 
+                    : 'border-slate-200 hover:border-emerald-300 hover:bg-slate-50 text-slate-700'
+                }`;
+                btn.innerHTML = `
+                    <span>${String.fromCharCode(65 + index)}. ${opt}</span>
+                    ${isSelected ? '<i class="fa-solid fa-circle-check text-emerald-600"></i>' : ''}
+                `;
+                btn.onclick = () => submitStudentAnswer(opt);
+                container.appendChild(btn);
+            });
+
+            if (myAnswer) {
+                document.getElementById('submittedNotice').classList.remove('hidden');
+            } else {
+                document.getElementById('submittedNotice').classList.add('hidden');
+            }
+        }
+
+        function submitStudentAnswer(selectedOption) {
+            if (!currentRoom || !currentUser) return;
+            // 寫入雲端資料庫
+            db.ref(`rooms/${currentRoom}/answers/${currentUser}`).set(selectedOption);
+        }
+    </script>
+</body>
+</html>
