@@ -85,7 +85,7 @@
 
     <script>
         // --- 1. Supabase Client 初始化配置 ---
-        const SUPABASE_URL = "https://yqrytizwuwgxpkqyyymd.supabase.co/rest/v1/";
+        const SUPABASE_URL = "https://yqrytizwuwgxpkqyyymd.supabase.co";
         const SUPABASE_KEY = "sb_publishable_jydU8c5DZMBHuKLFuK2JOg_ZjmncLwU";
         const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
