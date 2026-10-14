@@ -3,19 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>學生作答系統 - Socket 實時版</title>
+    <title>學生作答系統 - ClassPoll</title>
+    <!-- Tailwind CSS (UI 樣式庫) -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome (圖示庫) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- 載入 Socket.io 客戶端套件 -->
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Supabase JS SDK v2 -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="bg-slate-100 font-sans min-h-screen text-slate-800">
 
+    <!-- 頁頭導覽列 -->
     <nav class="bg-emerald-600 text-white shadow-md">
         <div class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center">
             <div class="flex items-center space-x-2">
                 <i class="fa-solid fa-user-graduate text-2xl"></i>
-                <span class="font-bold text-xl tracking-wide">ClassPoll 學生端 (Socket)</span>
+                <span class="font-bold text-xl tracking-wide">ClassPoll 學生端</span>
             </div>
             <div id="userBadge" class="hidden text-sm bg-emerald-700 px-3 py-1 rounded-full flex items-center gap-2">
                 <span id="nameLabel" class="font-semibold"></span>
@@ -24,9 +27,10 @@
         </div>
     </nav>
 
+    <!-- 主內容區 -->
     <div class="max-w-md mx-auto p-4 md:p-6">
 
-        <!-- 登入卡片 -->
+        <!-- 登入與教室代碼卡片 -->
         <div id="loginScreen" class="bg-white p-6 md:p-8 rounded-2xl shadow-lg mt-8">
             <h2 class="text-2xl font-bold mb-6 text-center text-slate-800">加入課堂問答</h2>
             <div class="space-y-4">
@@ -36,9 +40,9 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 mb-1">教室代碼 (Room Code)</label>
-                    <input type="text" id="roomCodeInput" placeholder="例如: 888" value="888" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none uppercase font-mono tracking-wider">
+                    <input type="text" id="roomCodeInput" value="888" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none uppercase font-mono tracking-wider">
                 </div>
-                <button onclick="enterRoom()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow-md transition duration-200">
+                <button id="enterRoomBtn" onclick="enterRoom()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition duration-200">
                     進入教室
                 </button>
             </div>
@@ -48,28 +52,30 @@
         <div id="studentDashboard" class="hidden space-y-6 mt-4">
             <div class="bg-emerald-700 text-white p-4 rounded-xl shadow flex justify-between items-center">
                 <span>教室代碼: <strong id="studentRoomCodeDisplay" class="font-mono text-xl">---</strong></span>
-                <span id="statusBadge" class="text-xs bg-emerald-800 px-2.5 py-1 rounded-full font-bold flex items-center gap-1">
-                    <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse"></span> Socket 連線中
+                <span class="text-xs bg-emerald-800 px-2.5 py-1 rounded-full font-bold flex items-center gap-1">
+                    <span id="connStatusDot" class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse"></span>
+                    <span id="connStatusText">Supabase 連線中</span>
                 </span>
             </div>
 
-            <!-- 等待題目 -->
+            <!-- 等待發布題目區塊 -->
             <div id="waitingForQuestion" class="bg-white p-8 rounded-2xl shadow-md text-center py-12">
                 <i class="fa-solid fa-spinner fa-spin text-4xl text-emerald-500 mb-4"></i>
                 <h3 class="text-xl font-bold text-slate-700">等待老師發布題目中...</h3>
-                <p class="text-slate-400 text-sm mt-2">Socket 頻道已就緒，題目發布後會立即推送至此。</p>
+                <p class="text-slate-400 text-sm mt-2">已連接至 Supabase 資料庫，發布後將自動即時顯示。</p>
             </div>
 
-            <!-- 答題卡片 -->
+            <!-- 題目與選擇選項卡片 -->
             <div id="studentQuestionCard" class="hidden bg-white p-6 rounded-2xl shadow-md">
                 <span class="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full">單選題</span>
                 <h2 id="displayQuestionText" class="text-xl font-bold text-slate-800 my-4">---</h2>
 
                 <div id="optionsContainer" class="space-y-3"></div>
 
+                <!-- 提交完成提示 -->
                 <div id="submittedNotice" class="hidden mt-6 bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl text-center">
                     <i class="fa-solid fa-circle-check text-2xl text-emerald-500 mb-1"></i>
-                    <p class="font-bold">答案已透過 Socket 即時傳送！</p>
+                    <p class="font-bold">答案已成功寫入 Supabase 資料庫！</p>
                     <p class="text-xs text-emerald-600 mt-1">您可以點選其他選項修改答案。</p>
                 </div>
             </div>
@@ -78,95 +84,354 @@
     </div>
 
     <script>
-        // 免費 Socket 廣播中繼伺服器 (直接連接)
-        const socket = io("https://pie-socket-server.herokuapp.com", {
-            transports: ['websocket', 'polling']
-        });
+        // --- 1. Supabase Client 初始化配置 ---
+        const SUPABASE_URL = "https://yqrytizwuwgxpkqyyymd.supabase.co/rest/v1/"; // 請替換為您的 Project URL
+        const SUPABASE_KEY = "sb_publishable_jydU8c5DZMBHuKLFuK2JOg_ZjmncLwU";          // 請替換為您的 Publishable Key (Anon Key)
+        const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        let currentUser = '';
-        let currentRoom = '';
-        let mySelectedOption = null;
+        // 全域狀態控制變數
+        let currentStudentUserId = null; // auth.uid() 匿名身分 ID
+        let currentStudentDisplayName = '';
+        let currentRoomCode = '';
+        let currentClassroomId = null;
+        let activeQuestion = null;
+        let mySelectedOptionIndex = null;
+        let questionSubscription = null;
+        let isSubmitting = false;
 
-        // 監聽 Socket 事件：接收老師發布的新題目
-        socket.on("NEW_QUESTION", (data) => {
-            if (data.room === currentRoom) {
-                mySelectedOption = null; // 重置答題狀態
-                showQuestion(data.questionData);
+        // 工具函式：解析 options 欄位 (確保傳入 Array，避免 JSON.parse 崩潰)
+        function parseQuestionOptions(rawOptions) {
+            if (Array.isArray(rawOptions)) return rawOptions;
+            if (typeof rawOptions === 'string') {
+                try {
+                    const parsed = JSON.parse(rawOptions);
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (e) {
+                    console.error("解析題目選項 JSON 失敗:", e);
+                    return [];
+                }
             }
-        });
+            return [];
+        }
 
-        // 進入教室
-        function enterRoom() {
-            const name = document.getElementById('usernameInput').value.trim();
-            const room = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+        // --- 2. 匿名身份驗證 (Auth) 流程 ---
+        async function ensureAnonymousAuth() {
+            try {
+                const { data: sessionData, error: sessionErr } = await _supabase.auth.getSession();
+                if (sessionErr) throw sessionErr;
 
-            if (!name || !room) {
-                alert('請輸入姓名與教室代碼！');
+                if (sessionData && sessionData.session && sessionData.session.user) {
+                    currentStudentUserId = sessionData.session.user.id;
+                    return currentStudentUserId;
+                }
+
+                const { data: anonData, error: anonErr } = await _supabase.auth.signInAnonymously();
+                if (anonErr) throw anonErr;
+
+                currentStudentUserId = anonData.user.id;
+                return currentStudentUserId;
+            } catch (err) {
+                console.error("匿名登入失敗:", err);
+                alert("建立學生連線身分失敗，請檢查網路或專案權限：" + err.message);
+                return null;
+            }
+        }
+
+        // --- 3. 進入教室與驗證流程 ---
+        async function enterRoom() {
+            const nameInput = document.getElementById('usernameInput').value.trim();
+            const roomInput = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+
+            if (!nameInput || !roomInput) {
+                alert("請完整輸入姓名/學號與教室代碼！");
                 return;
             }
 
-            currentUser = name;
-            currentRoom = room;
+            const enterBtn = document.getElementById('enterRoomBtn');
+            enterBtn.disabled = true;
+            enterBtn.textContent = "驗證中...";
 
-            // 告知 Socket 伺服器加入該房間
-            socket.emit("JOIN_ROOM", { room: currentRoom, name: currentUser });
+            try {
+                const userId = await ensureAnonymousAuth();
+                if (!userId) return;
 
-            document.getElementById('loginScreen').classList.add('hidden');
-            document.getElementById('userBadge').classList.remove('hidden');
-            document.getElementById('nameLabel').innerText = currentUser;
-            document.getElementById('studentDashboard').classList.remove('hidden');
-            document.getElementById('studentRoomCodeDisplay').innerText = currentRoom;
+                const { data: classroom, error: classroomErr } = await _supabase
+                    .from('classrooms')
+                    .select('*')
+                    .eq('room_code', roomInput)
+                    .eq('is_active', true)
+                    .maybeSingle();
+
+                if (classroomErr) {
+                    throw new Error("查詢教室資料庫失敗：" + classroomErr.message);
+                }
+
+                if (!classroom) {
+                    alert(`找不到代碼為 [${roomInput}] 的活動教室，請確認代碼或聯繫老師開啟教室。`);
+                    return;
+                }
+
+                currentStudentDisplayName = nameInput;
+                currentRoomCode = roomInput;
+                currentClassroomId = classroom.id;
+
+                document.getElementById('loginScreen').classList.add('hidden');
+                document.getElementById('userBadge').classList.remove('hidden');
+                document.getElementById('nameLabel').textContent = currentStudentDisplayName;
+                document.getElementById('studentDashboard').classList.remove('hidden');
+                document.getElementById('studentRoomCodeDisplay').textContent = currentRoomCode;
+
+                await loadLatestQuestion();
+                subscribeQuestions();
+
+            } catch (err) {
+                alert("連線教室失敗：" + err.message);
+            } finally {
+                enterBtn.disabled = false;
+                enterBtn.textContent = "進入教室";
+            }
         }
 
+        // 徹底清除狀態，防止切換教室後殘留舊資料
         function leaveRoom() {
+            if (questionSubscription) {
+                _supabase.removeChannel(questionSubscription);
+                questionSubscription = null;
+            }
+
+            currentClassroomId = null;
+            activeQuestion = null;
+            mySelectedOptionIndex = null;
+            isSubmitting = false;
+
+            document.getElementById('displayQuestionText').textContent = '---';
+            document.getElementById('optionsContainer').innerHTML = '';
+            document.getElementById('submittedNotice').classList.add('hidden');
+            document.getElementById('waitingForQuestion').classList.remove('hidden');
+            document.getElementById('studentQuestionCard').classList.add('hidden');
+
             document.getElementById('studentDashboard').classList.add('hidden');
             document.getElementById('userBadge').classList.add('hidden');
             document.getElementById('loginScreen').classList.remove('hidden');
         }
 
-        function showQuestion(questionData) {
+        // --- 4. 題目載入與 Supabase Realtime 監聽 ---
+        async function loadLatestQuestion() {
+            if (!currentClassroomId) return;
+
+            const { data, error } = await _supabase
+                .from('questions')
+                .select('*')
+                .eq('classroom_id', currentClassroomId)
+                .eq('status', 'published')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (error) {
+                console.error("讀取題目失敗:", error);
+                alert("讀取題目發生錯誤（可能是 RLS 限制）：" + error.message);
+                return;
+            }
+
+            if (data) {
+                activeQuestion = data;
+                await fetchMyVote(activeQuestion.id);
+                showQuestion(activeQuestion);
+            } else {
+                activeQuestion = null;
+                mySelectedOptionIndex = null;
+                document.getElementById('waitingForQuestion').classList.remove('hidden');
+                document.getElementById('studentQuestionCard').classList.add('hidden');
+            }
+        }
+
+        // 精確區分「無紀錄」與「資料庫/RLS 錯誤」
+        async function fetchMyVote(questionId) {
+            if (!currentStudentUserId) return;
+
+            const { data, error } = await _supabase
+                .from('votes')
+                .select('selected_option')
+                .eq('question_id', questionId)
+                .eq('student_id', currentStudentUserId)
+                .maybeSingle();
+
+            if (error) {
+                console.error("查詢個人投票紀錄失敗:", error);
+                alert("讀取您的個人歷史投票失敗（請檢查 votes 的 RLS SELECT 政策）：" + error.message);
+                mySelectedOptionIndex = null;
+                return;
+            }
+
+            if (data !== null && data !== undefined) {
+                mySelectedOptionIndex = Number(data.selected_option);
+            } else {
+                mySelectedOptionIndex = null;
+            }
+        }
+
+        // 訂閱 Realtime 廣播
+        function subscribeQuestions() {
+            if (questionSubscription) {
+                _supabase.removeChannel(questionSubscription);
+                questionSubscription = null;
+            }
+
+            const dot = document.getElementById('connStatusDot');
+            const text = document.getElementById('connStatusText');
+
+            questionSubscription = _supabase
+                .channel(`student_questions_realtime_${currentClassroomId}`)
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'questions',
+                    filter: `classroom_id=eq.${currentClassroomId}`
+                }, async () => {
+                    await loadLatestQuestion();
+                })
+                .subscribe((status, err) => {
+                    if (status === 'SUBSCRIBED') {
+                        dot.className = "w-2 h-2 rounded-full bg-emerald-300 animate-pulse";
+                        text.textContent = "雲端即時連線";
+                    } else if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+                        dot.className = "w-2 h-2 rounded-full bg-amber-400";
+                        text.textContent = "連線異常，重試中";
+                        if (err) console.error("Realtime 訂閱失敗:", err);
+                    }
+                });
+        }
+
+        // --- 5. 安全渲染選項 DOM ---
+        function showQuestion(qData) {
             document.getElementById('waitingForQuestion').classList.add('hidden');
             document.getElementById('studentQuestionCard').classList.remove('hidden');
-            document.getElementById('displayQuestionText').innerText = questionData.question;
+            document.getElementById('displayQuestionText').textContent = qData.question_text;
 
             const container = document.getElementById('optionsContainer');
             container.innerHTML = '';
 
-            questionData.options.forEach((opt, index) => {
+            const optionsList = parseQuestionOptions(qData.options);
+
+            if (optionsList.length === 0) {
+                const errDiv = document.createElement('div');
+                errDiv.className = "text-rose-500 text-sm";
+                errDiv.textContent = "此題目無有效選項或格式解析錯誤。";
+                container.appendChild(errDiv);
+                return;
+            }
+
+            optionsList.forEach((optText, index) => {
                 const btn = document.createElement('button');
-                const isSelected = mySelectedOption === opt;
-                btn.className = `w-full text-left p-4 rounded-xl border-2 transition font-medium flex justify-between items-center ${
+                btn.type = 'button';
+                const isSelected = mySelectedOptionIndex === index;
+
+                btn.className = `option-btn w-full text-left p-4 rounded-xl border-2 transition font-medium flex justify-between items-center ${
                     isSelected 
-                    ? 'border-emerald-600 bg-emerald-50 text-emerald-800 font-bold' 
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-800 font-bold shadow-sm' 
                     : 'border-slate-200 hover:border-emerald-300 hover:bg-slate-50 text-slate-700'
-                }`;
-                btn.innerHTML = `
-                    <span>${String.fromCharCode(65 + index)}. ${opt}</span>
-                    ${isSelected ? '<i class="fa-solid fa-circle-check text-emerald-600"></i>' : ''}
-                `;
-                btn.onclick = () => submitAnswer(opt, questionData);
+                } ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`;
+
+                btn.disabled = isSubmitting;
+
+                // 使用 textContent 防止 XSS
+                const labelSpan = document.createElement('span');
+                labelSpan.textContent = `${String.fromCharCode(65 + index)}. ${optText}`;
+                btn.appendChild(labelSpan);
+
+                if (isSelected) {
+                    const icon = document.createElement('i');
+                    icon.className = 'fa-solid fa-circle-check text-emerald-600';
+                    btn.appendChild(icon);
+                }
+
+                btn.onclick = () => sendAnswer(index);
                 container.appendChild(btn);
             });
 
-            if (mySelectedOption) {
+            if (mySelectedOptionIndex !== null) {
                 document.getElementById('submittedNotice').classList.remove('hidden');
             } else {
                 document.getElementById('submittedNotice').classList.add('hidden');
             }
         }
 
-        function submitAnswer(selectedOption, questionData) {
-            mySelectedOption = selectedOption;
+        // --- 6. 投票送出與 Upsert 錯誤處理 ---
+        async function sendAnswer(optionIndex) {
+            if (isSubmitting) return;
 
-            // 透過 Socket 將學生的答案發送給老師
-            socket.emit("SUBMIT_ANSWER", {
-                room: currentRoom,
-                studentName: currentUser,
-                option: selectedOption
-            });
+            if (!activeQuestion) {
+                alert("目前沒有發布中的題目，無法投票。");
+                return;
+            }
 
-            showQuestion(questionData);
+            const optionsList = parseQuestionOptions(activeQuestion.options);
+            if (typeof optionIndex !== 'number' || optionIndex < 0 || optionIndex >= optionsList.length) {
+                alert("無效的選項索引！");
+                return;
+            }
+
+            if (!currentStudentUserId) {
+                alert("學生連線身分遺失，請嘗試重整網頁。");
+                return;
+            }
+
+            isSubmitting = true;
+            setOptionsButtonsDisabled(true);
+
+            try {
+                // 送出前先驗證題目仍是 published
+                const { data: checkQ, error: checkErr } = await _supabase
+                    .from('questions')
+                    .select('status')
+                    .eq('id', activeQuestion.id)
+                    .maybeSingle();
+
+                if (checkErr || !checkQ || checkQ.status !== 'published') {
+                    alert("投票失敗：老師已關閉或更換此題目。");
+                    await loadLatestQuestion();
+                    return;
+                }
+
+                const votePayload = {
+                    question_id: activeQuestion.id,
+                    student_id: currentStudentUserId,
+                    selected_option: optionIndex
+                };
+
+                // 寫入資料庫
+                const { error: voteErr } = await _supabase
+                    .from('votes')
+                    .upsert(votePayload, { onConflict: 'question_id,student_id' });
+
+                if (voteErr) {
+                    console.error("投票 Upsert 失敗:", voteErr);
+                    alert(`投票失敗！專案 RLS 政策可能拒絕寫入：${voteErr.message}\n(代碼: ${voteErr.code || 'UNKNOWN'})`);
+                    return; // 寫入失敗則中斷，不更新前端成功提示
+                }
+
+                // 寫入成功才更新狀態
+                mySelectedOptionIndex = optionIndex;
+                showQuestion(activeQuestion);
+
+            } catch (err) {
+                console.error("投票異常:", err);
+                alert("投票時發生系統錯誤：" + err.message);
+            } finally {
+                isSubmitting = false;
+                setOptionsButtonsDisabled(false);
+            }
         }
+
+        function setOptionsButtonsDisabled(disabled) {
+            const btns = document.querySelectorAll('.option-btn');
+            btns.forEach(btn => btn.disabled = disabled);
+        }
+
+        window.onload = async () => {
+            await ensureAnonymousAuth();
+        };
     </script>
 </body>
 </html>
